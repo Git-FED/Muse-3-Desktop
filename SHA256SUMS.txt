@@ -1,0 +1,2 @@
+4cd46fed46d2d49520b883f187f1ac08e1be7312df80709299697730f776a5bc  dist/Desktop-Buddy-Portable.zip
+3fddfc25506ccef340723a60dde5313c383d4eef50ee96e7098aa4640bb41de0  Desktop-Buddy-source.zip
