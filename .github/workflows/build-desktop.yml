@@ -41,7 +41,6 @@ jobs:
       CI: "true"
       NPM_CONFIG_AUDIT: "false"
       NPM_CONFIG_FUND: "false"
-      NPM_CONFIG_LOGS_DIR: ".npm-logs"
 
     steps:
       - name: Check out repository
@@ -50,11 +49,10 @@ jobs:
       - name: Confirm workflow revision
         run: |
           set -euo pipefail
-          echo "Workflow revision: desktop-buddy-fix-3"
+          echo "Workflow revision: desktop-buddy-no-publish-1"
           echo "Commit: $GITHUB_SHA"
-          echo "Run ID: $GITHUB_RUN_ID"
 
-      - name: Verify required project files
+      - name: Verify required files
         run: |
           set -euo pipefail
 
@@ -78,31 +76,17 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Show runtime versions
-        run: |
-          set -euo pipefail
-          node --version
-          npm --version
-
       - name: Install dependencies
         timeout-minutes: 30
-        run: |
-          set -euo pipefail
-          mkdir -p .npm-logs
-
-          npm ci \
-            --foreground-scripts \
-            --loglevel=verbose \
-            --no-audit \
-            --no-fund
+        run: npm ci --foreground-scripts --no-audit --no-fund
 
       - name: Run project checks
         timeout-minutes: 15
         run: npm run check
 
-      - name: Build desktop application
+      - name: Build desktop application without publishing
         timeout-minutes: 40
-        run: npm run dist -- ${{ matrix.flag }}
+        run: npm run dist -- ${{ matrix.flag }} --publish never
 
       - name: Upload desktop application
         uses: actions/upload-artifact@v4
@@ -111,47 +95,3 @@ jobs:
           path: dist/**
           if-no-files-found: error
           retention-days: 14
-
-      - name: Print npm logs on failure
-        if: ${{ failure() }}
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-
-          const directory = path.resolve(".npm-logs");
-
-          if (!fs.existsSync(directory)) {
-            console.log("No npm diagnostic logs found.");
-            process.exit(0);
-          }
-
-          const logs = fs.readdirSync(directory)
-            .filter(name => name.endsWith(".log"))
-            .map(name => {
-              const file = path.join(directory, name);
-              return {
-                file,
-                modified: fs.statSync(file).mtimeMs
-              };
-            })
-            .sort((a, b) => b.modified - a.modified)
-            .slice(0, 3);
-
-          for (const log of logs) {
-            console.log(`\n--- ${path.basename(log.file)} ---`);
-            const lines = fs.readFileSync(log.file, "utf8")
-              .split(/\r?\n/);
-            console.log(lines.slice(-200).join("\n"));
-          }
-          NODE
-
-      - name: Upload npm diagnostic logs
-        if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-logs-${{ matrix.artifact }}
-          path: .npm-logs/*.log
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 7
