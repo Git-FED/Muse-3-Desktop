@@ -1,39 +1,168 @@
 name: Build Desktop Buddy
+
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    branches:
+      - main
+    tags:
+      - "v*"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Each run has its own concurrency group.
+# New pushes will not cancel an already running build via this group.
+concurrency:
+  group: desktop-buddy-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    name: Build (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
     strategy:
+      # Failure on one platform must not cancel the others.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
             flag: --win
             artifact: windows
+
           - os: macos-latest
             flag: --mac
             artifact: macos
+
           - os: ubuntu-latest
             flag: --linux
             artifact: linux
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify desktop icons present
+
+    defaults:
+      run:
         shell: bash
+
+    env:
+      CI: "true"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
+      NPM_CONFIG_LOGS_DIR: ${{ runner.temp }}/npm-logs
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Confirm updated workflow is running
         run: |
-          for f in assets/icon.png assets/icon.ico assets/icon.icns; do test -s "$f" || { echo "Missing required icon: $f"; exit 1; }; done
-      - uses: actions/setup-node@v4
+          set -euo pipefail
+
+          echo "Workflow revision: desktop-buddy-cancellation-fix-1"
+          echo "Workflow: $GITHUB_WORKFLOW"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run attempt: $GITHUB_RUN_ATTEMPT"
+          echo "Commit: $GITHUB_SHA"
+          echo "Ref: $GITHUB_REF"
+          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+
+      - name: Verify required files
+        run: |
+          set -euo pipefail
+
+          for file in \
+            package.json \
+            package-lock.json \
+            assets/icon.png \
+            assets/icon.ico \
+            assets/icon.icns
+          do
+            if [[ ! -s "$file" ]]; then
+              echo "::error::Missing or empty required file: $file"
+              exit 1
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
           cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run dist -- ${{ matrix.flag }}
-      - uses: actions/upload-artifact@v4
+          cache-dependency-path: package-lock.json
+
+      - name: Show Node and npm versions
+        run: |
+          set -euo pipefail
+
+          node --version
+          npm --version
+
+      - name: Install dependencies with diagnostic output
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+
+          npm ci \
+            --foreground-scripts \
+            --loglevel=verbose \
+            --no-audit \
+            --no-fund
+
+      - name: Run project checks
+        timeout-minutes: 15
+        run: npm run check
+
+      - name: Build desktop application
+        timeout-minutes: 40
+        run: npm run dist -- ${{ matrix.flag }}
+
+      - name: Upload desktop application
+        uses: actions/upload-artifact@v4
         with:
           name: desktop-buddy-${{ matrix.artifact }}
           path: dist/**
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Print npm logs on failure
+        if: ${{ failure() }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const directory = process.env.NPM_CONFIG_LOGS_DIR;
+
+          if (!directory || !fs.existsSync(directory)) {
+            console.log("No npm diagnostic logs found.");
+            process.exit(0);
+          }
+
+          const logs = fs.readdirSync(directory)
+            .filter(name => name.endsWith(".log"))
+            .map(name => {
+              const file = path.join(directory, name);
+              return {
+                file,
+                modified: fs.statSync(file).mtimeMs
+              };
+            })
+            .sort((a, b) => b.modified - a.modified)
+            .slice(0, 3);
+
+          for (const log of logs) {
+            console.log(`\n--- ${path.basename(log.file)} ---`);
+            const lines = fs.readFileSync(log.file, "utf8")
+              .split(/\r?\n/);
+            console.log(lines.slice(-200).join("\n"));
+          }
+          NODE
+
+      - name: Upload npm diagnostic logs
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-logs-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/npm-logs/**
+          if-no-files-found: ignore
+          retention-days: 7
