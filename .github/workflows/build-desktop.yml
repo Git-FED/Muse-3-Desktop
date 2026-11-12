@@ -11,12 +11,6 @@ on:
 permissions:
   contents: read
 
-# Each run has its own concurrency group.
-# New pushes will not cancel an already running build via this group.
-concurrency:
-  group: desktop-buddy-${{ github.workflow }}-${{ github.run_id }}
-  cancel-in-progress: false
-
 jobs:
   build:
     name: Build (${{ matrix.artifact }})
@@ -24,7 +18,6 @@ jobs:
     timeout-minutes: 90
 
     strategy:
-      # Failure on one platform must not cancel the others.
       fail-fast: false
       matrix:
         include:
@@ -48,25 +41,20 @@ jobs:
       CI: "true"
       NPM_CONFIG_AUDIT: "false"
       NPM_CONFIG_FUND: "false"
-      NPM_CONFIG_LOGS_DIR: ${{ runner.temp }}/npm-logs
+      NPM_CONFIG_LOGS_DIR: ".npm-logs"
 
     steps:
-      - name: Check out source
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Confirm updated workflow is running
+      - name: Confirm workflow revision
         run: |
           set -euo pipefail
-
-          echo "Workflow revision: desktop-buddy-cancellation-fix-1"
-          echo "Workflow: $GITHUB_WORKFLOW"
-          echo "Run ID: $GITHUB_RUN_ID"
-          echo "Run attempt: $GITHUB_RUN_ATTEMPT"
+          echo "Workflow revision: desktop-buddy-fix-3"
           echo "Commit: $GITHUB_SHA"
-          echo "Ref: $GITHUB_REF"
-          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+          echo "Run ID: $GITHUB_RUN_ID"
 
-      - name: Verify required files
+      - name: Verify required project files
         run: |
           set -euo pipefail
 
@@ -90,17 +78,17 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Show Node and npm versions
+      - name: Show runtime versions
         run: |
           set -euo pipefail
-
           node --version
           npm --version
 
-      - name: Install dependencies with diagnostic output
+      - name: Install dependencies
         timeout-minutes: 30
         run: |
           set -euo pipefail
+          mkdir -p .npm-logs
 
           npm ci \
             --foreground-scripts \
@@ -131,9 +119,9 @@ jobs:
           const fs = require("node:fs");
           const path = require("node:path");
 
-          const directory = process.env.NPM_CONFIG_LOGS_DIR;
+          const directory = path.resolve(".npm-logs");
 
-          if (!directory || !fs.existsSync(directory)) {
+          if (!fs.existsSync(directory)) {
             console.log("No npm diagnostic logs found.");
             process.exit(0);
           }
@@ -163,6 +151,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: npm-logs-${{ matrix.artifact }}
-          path: ${{ runner.temp }}/npm-logs/**
+          path: .npm-logs/*.log
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
